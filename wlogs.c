@@ -20,10 +20,11 @@
 #include <sys/socket.h>
 #include <linux/netlink.h>
 
+#define NETLINK_USER 	31
 // mutex 변수 선언
-pthread_mutex_t log_ses_mutex;
+pthread_mutex_t kernel_log_mutex;
 // pthread 조건 변수 선언
-pthread_cond_t log_ses_signal;
+pthread_cond_t kernel_log_cond;
 
 struct option origin_opts[] = {  
 	{ "start", 0, 0, 's'},  //0 isnt need to 인수, 1 is need to 인수
@@ -39,8 +40,8 @@ struct log_struct {
 	int time;
 };
 
-void log_ses_handle(void *ptr);
-void log_handle(DIR *dir);
+void kernel_log_handler(void *ptr);
+void log_handler(DIR *dir);
 void help(char *name);
 void check_process(int opt);
 void check_argument(int argc, char * argv[], int opt, struct option *opts, int optind);
@@ -48,7 +49,7 @@ void check_argument(int argc, char * argv[], int opt, struct option *opts, int o
 int main(int argc, char *argv[])
 {
 	// 스레드 변수 선언
-	pthread_t log_ses_thread;
+	pthread_t kernel_log_thread;
 	// 입력 받을 구조체 포인터 변수 선언
 	struct option *opts = origin_opts;
 	int opt;
@@ -91,30 +92,32 @@ int main(int argc, char *argv[])
 
 
 	// mutex 초기화
-	pthread_mutex_init(&log_ses_mutex,NULL);
+	pthread_mutex_init(&kernel_log_mutex,NULL);
 	// pthread 조건 변수 초기화
-	//pthread_cond_init(&log_ses_signal,NULL);
+	//pthread_cond_init(&kernel_log_cond,NULL);
 
-	if ( pthread_create(&log_ses_thread, NULL, (void *)log_ses_handle, NULL) < 0){
+	if ( pthread_create(&kernel_log_thread, NULL, (void *)kernel_log_handler, NULL) < 0){
 		printf("pthread_create error\n");
 	}
 
-	// pthread 조건 변수 신호 보냄 -> log_ses_handle()의 cond_wait 깨움
-	//pthread_cond_signal(&log_ses_signal);
+	// pthread 조건 변수 신호 보냄 -> kernel_log_handler()의 cond_wait 깨움
+	//pthread_cond_signal(&kernel_log_cond);
 
 	/*
 	pthread_cond_init()  공유 데이터에 대한 특정 조건에 따라 스레드의 실행을 중지하거나 실행시키는 역할
 						   cond 변수를 cond_attr로 지정된 변수 속성을 사용하여 초기화 하거나, NULL인
 	                       경우는 기본 속성으로 초기화 한다. */
 
-	// 함수 call한 후 끝날때까지 기다린다.                  
-	pthread_join(log_ses_thread, NULL); 
+	// 함수 call한 후 끝날때까지 기다린다.         
+	//usleep(1000000);
+
+	pthread_join(kernel_log_thread, NULL); 
 	// mutex 파괴
-	pthread_mutex_destroy(&log_ses_mutex);
+	pthread_mutex_destroy(&kernel_log_mutex);
 	return 0;
 }
 
-void log_ses_handle(void *ptr)
+void kernel_log_handler(void *ptr)
 {
 		DIR *dir;
 		while(1){
@@ -125,21 +128,21 @@ void log_ses_handle(void *ptr)
 			// 동작중인 스레드를 중지시킨다.
 			// 다른 스레드로부터 signal이나broadcast를 받았을 경우 mutex_lock을 걸고 cond_signal or
 			// cond_broadcast를 이용하여 스레드를 깨우고 mutex_unlock로 가지고 있는 mutex를 풀어준다.
-			//pthread_cond_wait(&log_ses_signal, &log_ses_mutex);
+			//pthread_cond_wait(&kernel_log_cond, &kernel_log_mutex);
 			printf("[%s] opened directory\n",__FUNCTION__);
 			dir = opendir(KERN_LOG_DATA);
 			if (dir == NULL){
 				printf("[%s:%d] could not open directory\n",__FUNCTION__,__LINE__);
 				continue;
 			}
-			log_handle(dir);
+			log_handler(dir);
 			closedir(dir);
 			printf("[%s] closed directory\n",__FUNCTION__);
 			usleep(1000000);  // 1초 = 1000000
 		}
 }
 
-void log_handle(DIR *dir)
+void log_handler(DIR *dir)
 {
 #if 0
 	FILE *src_fp, *dst_fp;
@@ -211,7 +214,7 @@ void log_handle(DIR *dir)
 	return;
 
 #else  // netlink 사용
-	if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT)) == -1)
+	if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_USER)) == -1)
 	{
 		perror("socket error :");
 		exit(1);
@@ -229,19 +232,27 @@ void log_handle(DIR *dir)
 	dst_addr.nl_family = AF_NETLINK;
 	dst_addr.nl_pid = 0;
 	dst_addr.nl_groups = 0;
-	nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
 
+	nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+	memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
 	nlh -> nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
 	nlh -> nlmsg_pid = getpid();
 	nlh -> nlmsg_flags = 0;
-	strcpy(NLMSG_DATA(nlh), "Hello world!!!!!!!");
+
+
+	strcpy(NLMSG_DATA(nlh), "The message sended from user space to kernel space");
 	iov.iov_base = (void *)nlh;
 	iov.iov_len = nlh->nlmsg_len;
+
+
 	msg.msg_name = (void *)&dst_addr;
 	msg.msg_namelen = sizeof(dst_addr);
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
-	printf("Waiting for message from kernel\n");:wq
+
+	printf("Sending message to kernel\n");
+	sendmsg(sock,&msg,0);
+	printf("Waiting for message from kernel\n");
 	
 	recvmsg(sock, &msg, 0);
 	printf(" Received message payload : %s\n", NLMSG_DATA(nlh));
