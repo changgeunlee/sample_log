@@ -8,3 +8,6 @@
 #define BUFF_SIZE 1024
 // PROGAME_NAME 선언
 #define PROGRAM_NAME "wlogs"
+
+// payload size 선언
+#define MAX_PAYLOAD 1024

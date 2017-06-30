@@ -15,6 +15,11 @@
 #include <sys/stat.h> //stat 구조체 
 #include <time.h> //ctime()
 
+//netlink 사용 
+#include <asm/types.h>
+#include <sys/socket.h>
+#include <linux/netlink.h>
+
 // mutex 변수 선언
 pthread_mutex_t log_ses_mutex;
 // pthread 조건 변수 선언
@@ -91,7 +96,7 @@ int main(int argc, char *argv[])
 	//pthread_cond_init(&log_ses_signal,NULL);
 
 	if ( pthread_create(&log_ses_thread, NULL, (void *)log_ses_handle, NULL) < 0){
-		printf("log_ses_handle() go error\n");
+		printf("pthread_create error\n");
 	}
 
 	// pthread 조건 변수 신호 보냄 -> log_ses_handle()의 cond_wait 깨움
@@ -125,7 +130,6 @@ void log_ses_handle(void *ptr)
 			dir = opendir(KERN_LOG_DATA);
 			if (dir == NULL){
 				printf("[%s:%d] could not open directory\n",__FUNCTION__,__LINE__);
-				usleep(1000000);
 				continue;
 			}
 			log_handle(dir);
@@ -145,19 +149,21 @@ void log_handle(DIR *dir)
 	char *buff;
 	long Size;
 #else
-	struct dirent *entry;
-	struct stat sstat;
-	int fd;
-	char src_file[64];
-	char dst_file[64];
-	char *pmmap;
-	char buff[30];   // 로그 한줄 100bytes
+	int sock;
+	struct sockaddr_nl src_addr, dst_addr;  // netlink struct
+	struct nlmsghdr *nlh;    // netlink msg header
+	struct msghdr msg;
+	struct iovec iov;
+	char buf[4096];
+	int len;
+	int i;
 
 #endif
+
 	/*
 		커널 로그를 수집해서 파일로 떨군다.
 	*/
-#if 0  // fopen(), fread(), fwirte()사용
+#if 0  // 동적메모리할당과 fopen(), fread(), fwirte()사용하여 기능 구현
 	while ((entry = readdir(dir)) != NULL){
 		if (!strncmp(entry->d_name, ".", 1) || !strncmp(entry->d_name,"..",2)){
 			usleep(500000);
@@ -204,45 +210,42 @@ void log_handle(DIR *dir)
 	}
 	return;
 
-#else  // open(), read(), write(), mmap() 사용
-	while ((entry = readdir(dir)) != NULL){
-		if (!strncmp(entry->d_name, ".", 1) || !strncmp(entry->d_name,"..",2)){
-			usleep(500000);
-			continue;
-		}
-		pthread_mutex_lock(&log_ses_mutex);
-
-		/* READ */
-/*
-		if ((fd = open("/home/wins/log/klog/test_mmap", O_RDWR)) < 0)
-		{
-*/
-		if ((fd = open("/home/toor/study/log/klog/test_mmap2", O_RDWR)) < 0)
-		{
-			perror("open error");
-		}
-		if (fstat(fd, &sstat) == -1 )
-		{
-			perror("fstat error");
-		}
-		if ((pmmap = (char*)mmap(0,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0))==(void*)-1){
-			perror("mmap error");
-			exit(1);
-		}
-		printf("%s\n", pmmap);
-		memcpy(buff,pmmap,30); // src부터 뒤에 num바이트 만큼 dst에 복사한다.
-//		printf("st_mtime=%s\n", ctime(&sstat.st_mtime));
-
-
-		if ( munmap(pmmap,10) == -1)
-		{
-			perror("munmap error");
-			exit(1);
-		}
-		close(fd);
-		pthread_mutex_unlock(&log_ses_mutex);
-		usleep(500000);
+#else  // netlink 사용
+	if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT)) == -1)
+	{
+		perror("socket error :");
+		exit(1);
 	}
+	memset(&src_addr, 0, sizeof(src_addr));
+	src_addr.nl_family=AF_NETLINK;
+	src_addr.nl_groups = 0;
+	if(bind(sock, (struct sockaddr *)&src_addr, sizeof(src_addr)))
+	{
+		perror("bind error");
+		close(sock);
+		exit(1);
+	}
+	memset(&dst_addr, 0, sizeof(dst_addr));
+	dst_addr.nl_family = AF_NETLINK;
+	dst_addr.nl_pid = 0;
+	dst_addr.nl_groups = 0;
+	nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+
+	nlh -> nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
+	nlh -> nlmsg_pid = getpid();
+	nlh -> nlmsg_flags = 0;
+	strcpy(NLMSG_DATA(nlh), "Hello world!!!!!!!");
+	iov.iov_base = (void *)nlh;
+	iov.iov_len = nlh->nlmsg_len;
+	msg.msg_name = (void *)&dst_addr;
+	msg.msg_namelen = sizeof(dst_addr);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	printf("Waiting for message from kernel\n");:wq
+	
+	recvmsg(sock, &msg, 0);
+	printf(" Received message payload : %s\n", NLMSG_DATA(nlh));
+	close(sock);
 	return;
 #endif
 }
