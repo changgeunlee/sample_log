@@ -19,10 +19,12 @@
 #include <asm/types.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
+#include <syslog.h>
 
 #define NETLINK_USER 	31
 // mutex 변수 선언
 pthread_mutex_t kernel_log_mutex;
+pthread_mutex_t app_log_mutex;
 // pthread 조건 변수 선언
 pthread_cond_t kernel_log_cond;
 
@@ -45,6 +47,7 @@ void log_handler(DIR *dir);
 void help(char *name);
 void check_process(int opt);
 void check_argument(int argc, char * argv[], int opt, struct option *opts, int optind);
+void collect_log();
 
 int main(int argc, char *argv[])
 {
@@ -93,6 +96,7 @@ int main(int argc, char *argv[])
 
 	// mutex 초기화
 	pthread_mutex_init(&kernel_log_mutex,NULL);
+	pthread_mutex_init(&app_log_mutex,NULL);
 	// pthread 조건 변수 초기화
 	//pthread_cond_init(&kernel_log_cond,NULL);
 
@@ -114,32 +118,32 @@ int main(int argc, char *argv[])
 	pthread_join(kernel_log_thread, NULL); 
 	// mutex 파괴
 	pthread_mutex_destroy(&kernel_log_mutex);
+	pthread_mutex_destroy(&app_log_mutex);
 	return 0;
 }
 
 void kernel_log_handler(void *ptr)
 {
-		DIR *dir;
-		while(1){
-			/* 
-				커널 로그 수집
-			*/
-
-			// 동작중인 스레드를 중지시킨다.
-			// 다른 스레드로부터 signal이나broadcast를 받았을 경우 mutex_lock을 걸고 cond_signal or
-			// cond_broadcast를 이용하여 스레드를 깨우고 mutex_unlock로 가지고 있는 mutex를 풀어준다.
-			//pthread_cond_wait(&kernel_log_cond, &kernel_log_mutex);
-			printf("[%s] opened directory\n",__FUNCTION__);
-			dir = opendir(KERN_LOG_DATA);
-			if (dir == NULL){
-				printf("[%s:%d] could not open directory\n",__FUNCTION__,__LINE__);
-				continue;
-			}
-			log_handler(dir);
-			closedir(dir);
-			printf("[%s] closed directory\n",__FUNCTION__);
-			usleep(1000000);  // 1초 = 1000000
+	DIR *dir;
+	while(1){
+		/* 
+			커널 로그 수집
+		*/
+		// 동작중인 스레드를 중지시킨다.
+		// 다른 스레드로부터 signal이나broadcast를 받았을 경우 mutex_lock을 걸고 cond_signal or
+		// cond_broadcast를 이용하여 스레드를 깨우고 mutex_unlock로 가지고 있는 mutex를 풀어준다.
+		//pthread_cond_wait(&kernel_log_cond, &kernel_log_mutex);
+		printf("[%s] opened directory\n",__FUNCTION__);
+		dir = opendir(KERN_LOG_DATA);
+		if (dir == NULL){
+			printf("[%s:%d] could not open directory\n",__FUNCTION__,__LINE__);
+			continue;
 		}
+		log_handler(dir);
+		closedir(dir);
+		printf("[%s] closed directory\n",__FUNCTION__);
+		usleep(1000000);  // 1초 = 1000000
+	}
 }
 
 void log_handler(DIR *dir)
@@ -157,6 +161,11 @@ void log_handler(DIR *dir)
 	struct nlmsghdr *nlh;    // netlink msg header
 	struct msghdr msg;
 	struct iovec iov;
+
+	Syslog_header syslog_hdr;
+	Syslog_data syslog_data;
+	Syslog_msg syslog_msg;
+
 	char buf[4096];
 	int len;
 	int i;
@@ -239,7 +248,7 @@ void log_handler(DIR *dir)
 	nlh -> nlmsg_pid = getpid();
 	nlh -> nlmsg_flags = 0;
 
-
+	
 	strcpy(NLMSG_DATA(nlh), "The message sended from user space to kernel space");
 	iov.iov_base = (void *)nlh;
 	iov.iov_len = nlh->nlmsg_len;
@@ -250,16 +259,34 @@ void log_handler(DIR *dir)
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
 
+
 	printf("Sending message to kernel\n");
 	sendmsg(sock,&msg,0);
-	printf("Waiting for message from kernel\n");
+	printf("Waiting for message frosm kernel\n");
 	
 	recvmsg(sock, &msg, 0);
 	printf(" Received message payload : %s\n", NLMSG_DATA(nlh));
+	collect_log();	
 	close(sock);
 	return;
 #endif
 }
+/*
+	로그 수집 기능 
+*/
+
+void collect_log()
+{
+	char log_buff[1024] = "writing...";
+	pthread_mutex_lock(&app_log_mutex);
+	openlog(PROGRAM_NAME, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_LOCAL0 );
+	syslog(LOG_DEBUG, "%s -> %s\n",  __FUNCTION__, log_buff );
+	closelog();
+	pthread_mutex_unlock(&app_log_mutex);
+
+}
+
+
 
 /*
 	추후 프로세스 관리 기능으로 추가 예정
