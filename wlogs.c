@@ -161,15 +161,16 @@ void log_handler(DIR *dir)
 	struct nlmsghdr *nlh;    // netlink msg header
 	struct msghdr msg;
 	struct iovec iov;
+	struct _syslog_msg *syslogmsg;
 
-	Syslog_header syslog_hdr;
-	Syslog_data syslog_data;
-	Syslog_msg syslog_msg;
-
-	char buf[4096];
 	int len;
 	int i;
 
+	memset(&msg,0x00,sizeof(msg));
+	memset(&iov,0x00,sizeof(iov));
+	syslogmsg = malloc(sizeof(struct _syslog_msg));
+	memset(syslogmsg, 0x00, sizeof(struct _syslog_msg));
+	
 #endif
 
 	/*
@@ -223,7 +224,7 @@ void log_handler(DIR *dir)
 	return;
 
 #else  // netlink 사용
-	if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_USER)) == -1)
+	if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_USER)) == -1)   // domain, type, protocol
 	{
 		perror("socket error :");
 		exit(1);
@@ -250,22 +251,27 @@ void log_handler(DIR *dir)
 
 	
 	strcpy(NLMSG_DATA(nlh), "The message sended from user space to kernel space");
+	/*
+		iov_base : 이름
+		iov_len : 길이 
+	*/
 	iov.iov_base = (void *)nlh;
 	iov.iov_len = nlh->nlmsg_len;
-
 
 	msg.msg_name = (void *)&dst_addr;
 	msg.msg_namelen = sizeof(dst_addr);
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
 
-
 	printf("Sending message to kernel\n");
 	sendmsg(sock,&msg,0);
-	printf("Waiting for message frosm kernel\n");
+	printf("Waiting for message from kernel\n");
 	
-	recvmsg(sock, &msg, 0);
-	printf(" Received message payload : %s\n", NLMSG_DATA(nlh));
+	len = recvmsg(sock, &msg, 0);
+	//printf("len = %d\n", len);      // 커널로부터 받은 메시지의 길이 
+	memcpy(syslogmsg, NLMSG_DATA(nlh),SYSLOG_MSG_SIZE);
+	printf("Recevied message = %s\n", syslogmsg->syslog_msg);
+	//printf("Received message payload : %s\n", (char *)NLMSG_DATA(nlh));
 	collect_log();	
 	close(sock);
 	return;
@@ -277,16 +283,19 @@ void log_handler(DIR *dir)
 
 void collect_log()
 {
+	/*
+		flogs 로그 생성  -->  /var/log/wlogs
+	*/
 	char log_buff[1024] = "writing...";
 	pthread_mutex_lock(&app_log_mutex);
-	openlog(PROGRAM_NAME, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_LOCAL0 );
-	syslog(LOG_DEBUG, "%s -> %s\n",  __FUNCTION__, log_buff );
+	openlog(PROGRAM_NAME, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_LOCAL0 );  /*  LOG_CONS : 로그를 보내는중 에러 발생하면, 콘솔로 즉시 내용 출력,
+	            											LOG_NDELAY : 로그 기술자에 즉시 연결 
+	            											LOG_LOG_PID : 각 메시지에 PID 포함 
+	            											*/
+	syslog(LOG_INFO, "%s -> %s\n",  __FUNCTION__, log_buff ); 
 	closelog();
 	pthread_mutex_unlock(&app_log_mutex);
-
 }
-
-
 
 /*
 	추후 프로세스 관리 기능으로 추가 예정
@@ -299,7 +308,7 @@ void check_process(int opt)
 	if(opt==115){
 
 	}else if(opt==116){
-		kill(pid,9);
+	//	kill(pid,9);
 	}else if(opt==100){
 		printf("디버그 기능 추가 예정\n");
 		exit(1);

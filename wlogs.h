@@ -5,21 +5,21 @@
 //#define KERN_LOG_DATA "/home/wins/log/klog"
 //#define WRITE_LOG_DATA "/home/wins/log/clog"
 // buff size 선언
-#define BUFF_SIZE 1024
+#define SYSLOG_MSG_SIZE 256
 // PROGAME_NAME 선언
 #define PROGRAM_NAME "wlogs"
 
 // payload size 선언
 #define MAX_PAYLOAD 1024
 
-typedef struct _syslog_header {
+struct _syslog_header {
 	int priority;
 	int version;
 	int timestamp;
 	int hostname;
-}Syslog_header;
+};
 
-typedef struct _syslog_data {
+struct _syslog_data {
 	char com;
 	char logid;
 	char level;
@@ -28,8 +28,8 @@ typedef struct _syslog_data {
 	int dip;
 	char dport;
 	char proto;
-}__attribute__((packed)) Syslog_data;
+}__attribute__((packed));
 
-typedef struct _syslog_msg{
-	char msg[1024];
-}Syslog_msg;
+struct _syslog_msg{
+	char syslog_msg[256];
+};
